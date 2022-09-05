@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize, Serializer};
-use std::cell::RefCell;
 use std::collections::HashSet;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 type Snowflake = String;
 
@@ -67,7 +66,7 @@ pub struct Message {
     #[serde(rename = "components")]
     pub action_rows: Vec<ActionRow>,
     #[serde(skip_serializing)]
-    context: Rc<RefCell<MessageContext>>,
+    context: Arc<Mutex<MessageContext>>,
 }
 
 impl Message {
@@ -80,12 +79,12 @@ impl Message {
             embeds: vec![],
             allow_mentions: None,
             action_rows: vec![],
-            context: Rc::new(RefCell::new(MessageContext::new())),
+            context: Arc::new(Mutex::new(MessageContext::new())),
         }
     }
     pub(crate) fn first_error_message(&self) -> Option<String> {
-        self.context
-            .borrow_mut()
+        self.context.lock()
+            .unwrap()
             .get_error(0)
             .map(|s| s.to_string())
     }
@@ -111,8 +110,8 @@ impl Message {
     }
 
     pub fn embed<Func>(&mut self, func: Func) -> &mut Self
-    where
-        Func: Fn(&mut Embed) -> &mut Embed,
+        where
+            Func: Fn(&mut Embed) -> &mut Embed,
     {
         let mut embed = Embed::new();
         func(&mut embed);
@@ -122,12 +121,12 @@ impl Message {
     }
 
     pub fn action_row<Func>(&mut self, func: Func) -> &mut Self
-    where
-        Func: Fn(&mut ActionRow) -> &mut ActionRow,
+        where
+            Func: Fn(&mut ActionRow) -> &mut ActionRow,
     {
         let mut row = ActionRow::new(&self.context);
         if self.action_rows.len() > Self::max_action_row_count() - 1 {
-            self.context.borrow_mut().add_error(&format!(
+            self.context.lock().unwrap().add_error(&format!(
                 "Action row count exceeded {} (maximum)",
                 Self::max_action_row_count()
             ));
@@ -408,8 +407,8 @@ enum NonCompositeComponent {
 
 impl Serialize for NonCompositeComponent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
+        where
+            S: Serializer,
     {
         match self {
             NonCompositeComponent::Button(button) => button.serialize(serializer),
@@ -423,21 +422,21 @@ pub struct ActionRow {
     pub component_type: u8,
     components: Vec<NonCompositeComponent>,
     #[serde(skip_serializing)]
-    context: Rc<RefCell<MessageContext>>,
+    context: Arc<Mutex<MessageContext>>,
 }
 
 impl ActionRow {
-    fn new(context: &Rc<RefCell<MessageContext>>) -> ActionRow {
+    fn new(context: &Arc<Mutex<MessageContext>>) -> ActionRow {
         ActionRow {
             component_type: 1,
             components: vec![],
-            context: Rc::clone(context),
+            context: Arc::clone(context),
         }
     }
 
     pub fn link_button<Func>(&mut self, button_mutator: Func) -> &mut Self
-    where
-        Func: Fn(&mut LinkButton) -> &mut LinkButton,
+        where
+            Func: Fn(&mut LinkButton) -> &mut LinkButton,
     {
         let mut button = LinkButton::new(&self.context);
         button_mutator(&mut button);
@@ -449,8 +448,8 @@ impl ActionRow {
     }
 
     pub fn regular_button<Func>(&mut self, button_mutator: Func) -> &mut Self
-    where
-        Func: Fn(&mut RegularButton) -> &mut RegularButton,
+        where
+            Func: Fn(&mut RegularButton) -> &mut RegularButton,
     {
         let mut button = RegularButton::new(&self.context);
         button_mutator(&mut button);
@@ -507,8 +506,8 @@ impl ButtonStyles {
 
 impl Serialize for ButtonStyles {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
+        where
+            S: Serializer,
     {
         serializer.serialize_i32(self.value())
     }
@@ -535,7 +534,8 @@ struct Button {
 
     #[serde(skip_serializing)]
     #[allow(dead_code)]
-    context: Rc<RefCell<MessageContext>>,
+    context: Arc<Mutex<MessageContext>>,
+
 }
 
 impl Button {
@@ -545,7 +545,7 @@ impl Button {
         emoji: Option<PartialEmoji>,
         url: Option<String>,
         disabled: Option<bool>,
-        context: &Rc<RefCell<MessageContext>>,
+        context: &Arc<Mutex<MessageContext>>,
     ) -> Self {
         Self {
             component_type: 2,
@@ -555,7 +555,7 @@ impl Button {
             custom_id: None,
             url,
             disabled,
-            context: Rc::clone(context),
+            context: Arc::clone(context),
         }
     }
 
@@ -566,7 +566,7 @@ impl Button {
         emoji: Option<PartialEmoji>,
         custom_id: String,
         disabled: Option<bool>,
-        context: &Rc<RefCell<MessageContext>>,
+        context: &Arc<Mutex<MessageContext>>,
     ) -> Self {
         Self {
             component_type: 2,
@@ -576,7 +576,7 @@ impl Button {
             custom_id: Some(custom_id),
             url: None,
             disabled,
-            context: Rc::clone(context),
+            context: Arc::clone(context),
         }
     }
 }
@@ -587,7 +587,7 @@ struct ButtonCommonBase {
     pub label: Option<String>,
     pub emoji: Option<PartialEmoji>,
     pub disabled: Option<bool>,
-    context: Rc<RefCell<MessageContext>>,
+    context: Arc<Mutex<MessageContext>>,
 }
 
 impl ButtonCommonBase {
@@ -595,18 +595,18 @@ impl ButtonCommonBase {
         label: Option<String>,
         emoji: Option<PartialEmoji>,
         disabled: Option<bool>,
-        context: &Rc<RefCell<MessageContext>>,
+        context: &Arc<Mutex<MessageContext>>,
     ) -> Self {
         ButtonCommonBase {
             label,
             emoji,
             disabled,
-            context: Rc::clone(context),
+            context: Arc::clone(context),
         }
     }
     fn label(&mut self, label: &str) -> &mut Self {
         if label.len() > Message::label_max_len() {
-            self.context.borrow_mut().add_error(&format!(
+            self.context.lock().unwrap().add_error(&format!(
                 "Label length exceeds {} characters",
                 Message::label_max_len()
             ));
@@ -659,7 +659,7 @@ pub struct LinkButton {
 }
 
 impl LinkButton {
-    fn new(context: &Rc<RefCell<MessageContext>>) -> Self {
+    fn new(context: &Arc<Mutex<MessageContext>>) -> Self {
         LinkButton {
             button_base: ButtonCommonBase::new(None, None, None, context),
             url: None,
@@ -681,7 +681,7 @@ pub struct RegularButton {
 }
 
 impl RegularButton {
-    fn new(context: &Rc<RefCell<MessageContext>>) -> Self {
+    fn new(context: &Arc<Mutex<MessageContext>>) -> Self {
         RegularButton {
             button_base: ButtonCommonBase::new(None, None, None, context),
             custom_id: None,
@@ -691,7 +691,7 @@ impl RegularButton {
 
     pub fn custom_id(&mut self, custom_id: &str) -> &mut Self {
         if custom_id.len() > Message::custom_id_max_len() {
-            self.button_base.context.borrow_mut().add_error(&format!(
+            self.button_base.context.lock().unwrap().add_error(&format!(
                 "Custom ID length exceeds {} characters",
                 Message::custom_id_max_len()
             ));
@@ -700,10 +700,10 @@ impl RegularButton {
         if !self
             .button_base
             .context
-            .borrow_mut()
+            .lock().unwrap()
             .register_custom_id(custom_id)
         {
-            self.button_base.context.borrow_mut().add_error(&format!(
+            self.button_base.context.lock().unwrap().add_error(&format!(
                 "Attempt to use the same custom ID ({}) twice! (buttonLabel: {})",
                 custom_id,
                 match self.button_base.label.as_ref() {
@@ -735,7 +735,7 @@ impl ButtonConstructor for LinkButton {
         if self.url.is_none() {
             self.button_base
                 .context
-                .borrow_mut()
+                .lock().unwrap()
                 .add_error("Url of a Link button must be set!");
             return None;
         }
@@ -755,14 +755,14 @@ impl ButtonConstructor for RegularButton {
         if self.style.is_none() {
             self.button_base
                 .context
-                .borrow_mut()
+                .lock().unwrap()
                 .add_error("Button style of a NonLink button must be set!");
             return None;
         }
         if self.custom_id.is_none() {
             self.button_base
                 .context
-                .borrow_mut()
+                .lock().unwrap()
                 .add_error("Custom ID of a NonLink button must be set!");
             return None;
         }
