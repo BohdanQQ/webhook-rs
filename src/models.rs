@@ -697,21 +697,24 @@ impl RegularButton {
             ));
             return self;
         }
-        if !self
-            .button_base
-            .context
-            .lock().unwrap()
-            .register_custom_id(custom_id)
+
         {
-            self.button_base.context.lock().unwrap().add_error(&format!(
-                "Attempt to use the same custom ID ({}) twice! (buttonLabel: {})",
-                custom_id,
-                match self.button_base.label.as_ref() {
-                    Some(label) => label,
-                    None => "Label not set",
-                }
-            ));
-            return self;
+            let mut locked_context = self.button_base.context.lock().unwrap();
+            if !locked_context.register_custom_id(custom_id)
+            {
+                locked_context.add_error(&format!(
+                    "Attempt to use the same custom ID ({}) twice! (buttonLabel: {})",
+                    custom_id,
+                    match self.button_base.label.as_ref() {
+                        Some(label) => label,
+                        None => "Label not set",
+                    }
+                ));
+                // the return statement does not drop the mutex guard (or at least the compiler does
+                // not think so), therefore dropped explicitly
+                std::mem::drop(locked_context);
+                return self;
+            }
         }
 
         self.custom_id = Some(custom_id.to_string());
