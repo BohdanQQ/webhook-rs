@@ -94,7 +94,9 @@ impl WebhookClient {
 #[cfg(test)]
 mod tests {
     use crate::client::WebhookClient;
-    use crate::models::{Message, NonLinkButtonStyle};
+    use crate::models::{
+        ActionRow, DiscordApiCompatible, Message, MessageContext, NonLinkButtonStyle,
+    };
 
     async fn assert_client_error<BuildFunc, MessagePred>(
         message_build: BuildFunc,
@@ -118,6 +120,17 @@ mod tests {
         };
     }
 
+    fn assert_valid_message<BuildFunc>(func: BuildFunc)
+    where
+        BuildFunc: Fn(&mut Message) -> &mut Message,
+    {
+        let mut message = Message::new();
+        func(&mut message);
+        if let Err(unexpected) = message.check_compatibility(&mut MessageContext::new()) {
+            assert!(false, "Unexpected validation error {}", unexpected);
+        }
+    }
+
     #[tokio::test]
     async fn send_message_custom_id_reuse_prohibited() {
         assert_client_error(
@@ -130,6 +143,27 @@ mod tests {
                         button.custom_id("0").style(NonLinkButtonStyle::Primary)
                     })
                 })
+            },
+            |err_msg| err_msg.to_lowercase().contains("twice"),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn send_message_custom_id_reuse_prohibited_accross_action_rows() {
+        assert_client_error(
+            |message| {
+                message
+                    .action_row(|row| {
+                        row.regular_button(|button| {
+                            button.custom_id("0").style(NonLinkButtonStyle::Primary)
+                        })
+                    })
+                    .action_row(|row| {
+                        row.regular_button(|button| {
+                            button.custom_id("0").style(NonLinkButtonStyle::Primary)
+                        })
+                    })
             },
             |err_msg| err_msg.to_lowercase().contains("twice"),
         )
@@ -220,5 +254,69 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn max_button_count_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    for i in 0..(ActionRow::max_button_count() + 1) {
+                        row.regular_button(|btn| {
+                            btn.style(NonLinkButtonStyle::Primary)
+                                .custom_id(&(i.to_string()))
+                        });
+                    }
+                    row
+                })
+            },
+            |err_msg| {
+                err_msg.to_lowercase().contains("exceed")
+                    && err_msg.to_lowercase().contains("button")
+            },
+        )
+        .await;
+    }
+
+    #[test]
+    fn max_button_count_enforced_only_per_action_row() {
+        assert_valid_message(|message| {
+            for i in 0..Message::max_action_row_count() {
+                message.action_row(|row| {
+                    for j in 0..(ActionRow::max_button_count()) {
+                        row.regular_button(|btn| {
+                            btn.style(NonLinkButtonStyle::Primary)
+                                .custom_id(&(i.to_string() + &j.to_string()))
+                        });
+                    }
+                    row
+                });
+            }
+            message
+        });
+    }
+
+    #[test]
+    fn message_valid_basic() {
+        assert_valid_message(|message| {
+            message
+                .content("@test")
+                .username("test")
+                .avatar_url("test")
+                .embed(|embed| {
+                    embed
+                        .title("test")
+                        .description("test")
+                        .footer("test", Some(String::from("test")))
+                        .image("test")
+                        .thumbnail("test")
+                        .author(
+                            "test",
+                            Some(String::from("test")),
+                            Some(String::from("test")),
+                        )
+                        .field("test", "test", false)
+                })
+        });
     }
 }
