@@ -19,10 +19,16 @@ pub struct Webhook {
 #[derive(Debug)]
 pub(crate) struct MessageContext {
     custom_ids: HashSet<String>,
+    button_count_in_action_row: usize,
+    select_menu_count_in_action_row: usize,
 }
 
 impl MessageContext {
     /// Tries to register a custom id.
+    ///
+    /// # Watch out!
+    ///
+    /// Use `register_button` and `register_select_menu` for Buttons and Select Menus respectively!
     ///
     /// # Arguments
     ///
@@ -33,14 +39,68 @@ impl MessageContext {
     /// Returns true if the custom id is unique.
     ///
     /// Returns false if the supplied custom id is duplicate of an already registered custom id.
-    pub fn register_custom_id(&mut self, id: &str) -> bool {
-        self.custom_ids.insert(id.to_string())
+    fn register_custom_id(&mut self, id: &str) -> Result<(), String> {
+        if !self.custom_ids.insert(id.to_string()) {
+            return Err(format!("Attempt to use the same custom ID ({}) twice!", id));
+        }
+        Ok(())
     }
 
     pub fn new() -> MessageContext {
         MessageContext {
             custom_ids: HashSet::new(),
+            button_count_in_action_row: 0,
+            select_menu_count_in_action_row: 0,
         }
+    }
+
+    //TODO - documentation
+    pub fn register_button(&mut self, id: &str) -> Result<(), String> {
+        self.register_custom_id(id)?;
+
+        if self.button_count_in_action_row >= ActionRow::max_button_count() {
+            return Err(format!(
+                "Button count for action row exceeded maximum ({})",
+                ActionRow::max_button_count()
+            ));
+        }
+
+        self.button_count_in_action_row += 1;
+
+        if self.select_menu_count_in_action_row > 0 {
+            return Err(
+                "An Action Row containing buttons cannot also contain a select menu".to_string(),
+            );
+        }
+
+        Ok(())
+    }
+
+    pub fn register_select_menu(&mut self, id: &str) -> Result<(), String> {
+        self.register_custom_id(id)?;
+
+        if self.select_menu_count_in_action_row >= ActionRow::max_select_menu_count() {
+            return Err(format!(
+                "Select menu count for action row exceeded maximum ({})",
+                ActionRow::max_select_menu_count()
+            ));
+        }
+
+        self.select_menu_count_in_action_row += 1;
+
+        if self.button_count_in_action_row > 0 {
+            return Err(
+                "An Action Row containing a select menu cannot also contain buttons".to_string(),
+            );
+        }
+
+        Ok(())
+    }
+
+    // should be called once per action row
+    pub fn register_action_row(&mut self) {
+        self.button_count_in_action_row = 0;
+        self.button_count_in_action_row = 0;
     }
 }
 
@@ -375,6 +435,7 @@ impl AllowedMentions {
 #[derive(Debug)]
 enum NonCompositeComponent {
     Button(Button),
+    SelectMenu(SelectMenu),
 }
 
 impl Serialize for NonCompositeComponent {
@@ -384,6 +445,7 @@ impl Serialize for NonCompositeComponent {
     {
         match self {
             NonCompositeComponent::Button(button) => button.serialize(serializer),
+            NonCompositeComponent::SelectMenu(menu) => menu.serialize(serializer),
         }
     }
 }
@@ -402,7 +464,7 @@ impl ActionRow {
             components: vec![],
         }
     }
-
+    //TODO: (consider) change return type (limit the interface) once Button or SelectMenu is added? (limited to only one of those)
     pub fn link_button<Func>(&mut self, button_mutator: Func) -> &mut Self
     where
         Func: Fn(&mut LinkButton) -> &mut LinkButton,
@@ -410,7 +472,7 @@ impl ActionRow {
         let mut button = LinkButton::new();
         button_mutator(&mut button);
         self.components.push(NonCompositeComponent::Button(
-            button.to_serializable_button()
+            button.to_serializable_button(),
         ));
         self
     }
@@ -422,9 +484,28 @@ impl ActionRow {
         let mut button = RegularButton::new();
         button_mutator(&mut button);
         self.components.push(NonCompositeComponent::Button(
-            button.to_serializable_button()
+            button.to_serializable_button(),
         ));
         self
+    }
+
+    pub fn select_menu<Func>(&mut self, menu_mutator: Func) -> &mut Self
+    where
+        Func: Fn(&mut SelectMenu) -> &mut SelectMenu,
+    {
+        let mut menu = SelectMenu::new(None, None, None, None, None);
+        menu_mutator(&mut menu);
+        self.components
+            .push(NonCompositeComponent::SelectMenu(menu));
+        self
+    }
+
+    pub fn max_button_count() -> usize {
+        5
+    }
+
+    pub fn max_select_menu_count() -> usize {
+        1
     }
 }
 
@@ -659,6 +740,140 @@ impl ToSerializableButton for RegularButton {
     }
 }
 
+macro_rules! string_option_setter {
+    ($base:ident) => {
+        pub fn $base(&mut self, $base: &str) -> &mut Self {
+            self.$base = Some($base.to_string());
+            self
+        }
+    };
+}
+
+macro_rules! simple_option_setter {
+    ($base:ident, $option_inner_t:ty) => {
+        pub fn $base(&mut self, $base: $option_inner_t) -> &mut Self {
+            self.$base = Some($base);
+            self
+        }
+    };
+}
+
+#[derive(Serialize, Debug)]
+pub struct SelectMenu {
+    #[serde(rename = "type")]
+    pub component_type: i8,
+    pub custom_id: Option<String>,
+    pub options: Vec<SelectOption>,
+    pub placeholder: Option<String>,
+    pub min_values: Option<u8>,
+    pub max_values: Option<u8>,
+    pub disabled: Option<bool>,
+}
+
+impl SelectMenu {
+    fn new(
+        custom_id: Option<String>,
+        placeholder: Option<String>,
+        min_values: Option<u8>,
+        max_values: Option<u8>,
+        disabled: Option<bool>,
+    ) -> Self {
+        Self {
+            component_type: 3,
+            custom_id,
+            options: vec![],
+            placeholder,
+            min_values,
+            max_values,
+            disabled,
+        }
+    }
+
+    pub fn option<Func>(&mut self, option_mutator: Func) -> &mut Self
+    where
+        Func: Fn(&mut SelectOption) -> &mut SelectOption,
+    {
+        let mut option = SelectOption::new(None, None, None, None, None);
+        option_mutator(&mut option);
+        self.options.push(option);
+        self
+    }
+
+    string_option_setter!(custom_id);
+    string_option_setter!(placeholder);
+    simple_option_setter!(min_values, u8);
+    simple_option_setter!(max_values, u8);
+    simple_option_setter!(disabled, bool);
+
+    pub fn max_option_count() -> usize {
+        25
+    }
+    pub fn placeholder_max_len() -> usize {
+        150
+    }
+    pub fn minimum_of_min_values() -> u8 {
+        0
+    }
+    pub fn maximum_of_min_values() -> u8 {
+        25
+    }
+    pub fn maximum_of_max_values() -> u8 {
+        25
+    }
+}
+
+#[derive(Serialize, Debug)]
+pub struct SelectOption {
+    pub label: Option<String>,
+    pub value: Option<String>,
+    pub description: Option<String>,
+    pub emoji: Option<PartialEmoji>,
+    pub default: Option<bool>,
+}
+
+impl SelectOption {
+    fn new(
+        label: Option<String>,
+        value: Option<String>,
+        description: Option<String>,
+        emoji: Option<PartialEmoji>,
+        default: Option<bool>,
+    ) -> Self {
+        Self {
+            label,
+            value,
+            description,
+            emoji,
+            default,
+        }
+    }
+
+    string_option_setter!(label);
+    string_option_setter!(value);
+    string_option_setter!(description);
+
+    pub fn emoji(&mut self, emoji_id: &str, name: &str, animated: bool) -> &mut Self {
+        self.emoji = Some(PartialEmoji {
+            id: emoji_id.to_string(),
+            name: name.to_string(),
+            animated: Some(animated),
+        });
+        self
+    }
+
+    simple_option_setter!(default, bool);
+
+    pub fn label_max_len() -> usize {
+        100
+    }
+    pub fn value_max_len() -> usize {
+        100
+    }
+    pub fn description_max_len() -> usize {
+        100
+    }
+}
+
 /// A trait for checking that an API message component is compatible with the official Discord API constraints
 ///
 /// This trait should be implemented for any components for which the Discord API documentation states
@@ -672,6 +887,7 @@ impl DiscordApiCompatible for NonCompositeComponent {
     fn check_compatibility(&self, context: &mut MessageContext) -> Result<(), String> {
         match self {
             NonCompositeComponent::Button(b) => b.check_compatibility(context),
+            NonCompositeComponent::SelectMenu(m) => m.check_compatibility(context),
         }
     }
 }
@@ -715,13 +931,7 @@ impl DiscordApiCompatible for Button {
                             Message::custom_id_max_len()
                         ),
                     )
-                    .and(bool_to_result(
-                        context.register_custom_id(id),
-                        format!(
-                            "Attempt to use the same custom ID ({}) twice! (buttonLabel: {:?})",
-                            id, self.label
-                        ),
-                    ))
+                    .and(context.register_button(id))
                 } else {
                     Err("Custom ID of a NonLink button must be set!".to_string())
                 };
@@ -732,6 +942,7 @@ impl DiscordApiCompatible for Button {
 
 impl DiscordApiCompatible for ActionRow {
     fn check_compatibility(&self, context: &mut MessageContext) -> Result<(), String> {
+        context.register_action_row();
         self.components.iter().fold(Ok(()), |acc, component| {
             acc.and(component.check_compatibility(context))
         })
@@ -750,5 +961,94 @@ impl DiscordApiCompatible for Message {
         self.action_rows
             .iter()
             .fold(Ok(()), |acc, row| acc.and(row.check_compatibility(context)))
+    }
+}
+
+fn prepare_length_check<'b>(
+    specs: Vec<(&Option<String>, usize, &'b str)>,
+) -> Vec<(String, usize, &'b str)> {
+    let mut result = vec![];
+    for (opt, size, err_name) in specs {
+        if let Some(val) = opt {
+            result.push((val.clone(), size, err_name));
+        }
+    }
+    result
+}
+
+fn limit_max_length(specs: Vec<(&Option<String>, usize, &str)>) -> Result<(), String> {
+    let length_check_specification = prepare_length_check(specs);
+    for (value, max_len, err_name) in length_check_specification {
+        if value.len() > max_len {
+            return Err(format!("{} exceeded maximum length {}", err_name, max_len));
+        }
+    }
+    Ok(())
+}
+
+impl DiscordApiCompatible for SelectOption {
+    fn check_compatibility(&self, _context: &mut MessageContext) -> Result<(), String> {
+        if self.label.is_none() {
+            return Err("Label of a menu option must be set!".to_string());
+        } else if self.value.is_none() {
+            return Err("Value of a menu option must be set!".to_string());
+        }
+
+        limit_max_length(vec![
+            (&self.label, SelectOption::label_max_len(), "Label"),
+            (&self.label, SelectOption::value_max_len(), "Value"),
+            (
+                &self.description,
+                SelectOption::description_max_len(),
+                "Description",
+            ),
+        ])
+    }
+}
+
+impl DiscordApiCompatible for SelectMenu {
+    fn check_compatibility(&self, context: &mut MessageContext) -> Result<(), String> {
+        if let Some(id) = self.custom_id.as_ref() {
+            context.register_select_menu(id)?
+        } else {
+            return Err("Custom ID of a Select menu must be set!".to_string());
+        }
+
+        if self.options.len() > SelectMenu::max_option_count() {
+            return Err(format!(
+                "Option count exceeded maximum {}",
+                SelectMenu::max_option_count()
+            ));
+        } else if self.min_values.map_or(false, |val| {
+            val > SelectMenu::maximum_of_min_values() || val < SelectMenu::minimum_of_min_values()
+        }) {
+            return Err(format!(
+                "Min values does not fall into the [{}, {}] interval",
+                SelectMenu::minimum_of_min_values(),
+                SelectMenu::maximum_of_min_values()
+            ));
+        } else if self
+            .max_values
+            .map_or(false, |val| val > SelectMenu::maximum_of_max_values())
+        {
+            return Err(format!(
+                "Max values exceeded maximum {}",
+                SelectMenu::maximum_of_max_values()
+            ));
+        }
+
+        limit_max_length(vec![
+            (&self.custom_id, Message::custom_id_max_len(), "Custom ID"),
+            (
+                &self.placeholder,
+                SelectMenu::placeholder_max_len(),
+                "Placeholder",
+            ),
+        ])
+        .and(
+            self.options
+                .iter()
+                .fold(Ok(()), |acc, val| acc.and(val.check_compatibility(context))),
+        )
     }
 }
