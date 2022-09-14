@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashSet;
+use std::fmt::Display;
 
 type Snowflake = String;
 
@@ -14,94 +15,6 @@ pub struct Webhook {
     pub avatar: Option<String>,
     pub token: String,
     pub application_id: Option<Snowflake>,
-}
-
-#[derive(Debug)]
-pub(crate) struct MessageContext {
-    custom_ids: HashSet<String>,
-    button_count_in_action_row: usize,
-    select_menu_count_in_action_row: usize,
-}
-
-impl MessageContext {
-    /// Tries to register a custom id.
-    ///
-    /// # Watch out!
-    ///
-    /// Use `register_button` and `register_select_menu` for Buttons and Select Menus respectively!
-    ///
-    /// # Arguments
-    ///
-    /// * `id`: the custom id to be registered
-    ///
-    ///
-    /// # Return value
-    /// Returns true if the custom id is unique.
-    ///
-    /// Returns false if the supplied custom id is duplicate of an already registered custom id.
-    fn register_custom_id(&mut self, id: &str) -> Result<(), String> {
-        if !self.custom_ids.insert(id.to_string()) {
-            return Err(format!("Attempt to use the same custom ID ({}) twice!", id));
-        }
-        Ok(())
-    }
-
-    pub fn new() -> MessageContext {
-        MessageContext {
-            custom_ids: HashSet::new(),
-            button_count_in_action_row: 0,
-            select_menu_count_in_action_row: 0,
-        }
-    }
-
-    //TODO - documentation
-    pub fn register_button(&mut self, id: &str) -> Result<(), String> {
-        self.register_custom_id(id)?;
-
-        if self.button_count_in_action_row >= ActionRow::max_button_count() {
-            return Err(format!(
-                "Button count for action row exceeded maximum ({})",
-                ActionRow::max_button_count()
-            ));
-        }
-
-        self.button_count_in_action_row += 1;
-
-        if self.select_menu_count_in_action_row > 0 {
-            return Err(
-                "An Action Row containing buttons cannot also contain a select menu".to_string(),
-            );
-        }
-
-        Ok(())
-    }
-
-    pub fn register_select_menu(&mut self, id: &str) -> Result<(), String> {
-        self.register_custom_id(id)?;
-
-        if self.select_menu_count_in_action_row >= ActionRow::max_select_menu_count() {
-            return Err(format!(
-                "Select menu count for action row exceeded maximum ({})",
-                ActionRow::max_select_menu_count()
-            ));
-        }
-
-        self.select_menu_count_in_action_row += 1;
-
-        if self.button_count_in_action_row > 0 {
-            return Err(
-                "An Action Row containing a select menu cannot also contain buttons".to_string(),
-            );
-        }
-
-        Ok(())
-    }
-
-    // should be called once per action row
-    pub fn register_action_row(&mut self) {
-        self.button_count_in_action_row = 0;
-        self.button_count_in_action_row = 0;
-    }
 }
 
 #[derive(Serialize, Debug)]
@@ -171,16 +84,16 @@ impl Message {
         self
     }
 
-    pub fn max_action_row_count() -> usize {
-        5
+    pub const fn action_row_count_interval() -> Interval<usize> {
+        Interval::new(0, 5)
     }
 
-    pub fn label_max_len() -> usize {
-        80
+    pub const fn label_len_interval() -> Interval<usize> {
+        Interval::new(0, 80)
     }
 
-    pub fn custom_id_max_len() -> usize {
-        100
+    pub const fn custom_id_len_interval() -> Interval<usize> {
+        Interval::new(1, 100)
     }
 
     pub fn allow_mentions(
@@ -192,6 +105,24 @@ impl Message {
     ) -> &mut Self {
         self.allow_mentions = Some(AllowedMentions::new(parse, roles, users, replied_user));
         self
+    }
+}
+
+pub struct Interval<T> {
+    pub max_allowed: T,
+    pub min_allowed: T,
+}
+
+impl<T: Ord> Interval<T> {
+    pub const fn new(min_allowed: T, max_allowed: T) -> Self {
+        Interval {
+            min_allowed,
+            max_allowed,
+        }
+    }
+
+    pub fn contains(&self, value: &T) -> bool {
+        self.min_allowed <= *value && self.max_allowed >= *value
     }
 }
 
@@ -500,12 +431,12 @@ impl ActionRow {
         self
     }
 
-    pub fn max_button_count() -> usize {
-        5
+    pub const fn button_count_interval() -> Interval<usize> {
+        Interval::new(0, 5)
     }
 
-    pub fn max_select_menu_count() -> usize {
-        1
+    pub const fn select_menu_count_interval() -> Interval<usize> {
+        Interval::new(0, 1)
     }
 }
 
@@ -805,20 +736,22 @@ impl SelectMenu {
     simple_option_setter!(max_values, u8);
     simple_option_setter!(disabled, bool);
 
-    pub fn max_option_count() -> usize {
-        25
+    pub const fn option_count_interval() -> Interval<usize> {
+        Interval::new(1, 25)
     }
-    pub fn placeholder_max_len() -> usize {
-        150
+
+    pub const fn placeholder_len_interval() -> Interval<usize> {
+        Interval::new(0, 150)
     }
-    pub fn minimum_of_min_values() -> u8 {
-        0
+
+    pub const fn min_values_interval() -> Interval<u8> {
+        Interval::new(0, 25)
     }
-    pub fn maximum_of_min_values() -> u8 {
-        25
-    }
-    pub fn maximum_of_max_values() -> u8 {
-        25
+
+    // the minimum is not actually stated, but at the time of implementing the API returns an error response when max_values == 0
+    // additionally, max_values == 0 doesn't really make sense
+    pub const fn max_values_interval() -> Interval<u8> {
+        Interval::new(1, 25)
     }
 }
 
@@ -863,14 +796,137 @@ impl SelectOption {
 
     simple_option_setter!(default, bool);
 
-    pub fn label_max_len() -> usize {
-        100
+    pub const fn label_len_interval() -> Interval<usize> {
+        Interval::new(1, 100)
     }
-    pub fn value_max_len() -> usize {
-        100
+    pub const fn value_len_interval() -> Interval<usize> {
+        Interval::new(1, 100)
     }
-    pub fn description_max_len() -> usize {
-        100
+    pub const fn description_len_interval() -> Interval<usize> {
+        Interval::new(0, 100)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct MessageContext {
+    custom_ids: HashSet<String>,
+    button_count_in_action_row: usize,
+    select_menu_count_in_action_row: usize,
+}
+
+fn interval_check<T: Ord + Display>(
+    interval: &Interval<T>,
+    value_to_test: &T,
+    field_name: &str,
+) -> Result<(), String> {
+    if !interval.contains(value_to_test) {
+        return Err(format!(
+            "{} ({}) not in the [{}, {}] interval",
+            field_name, value_to_test, interval.min_allowed, interval.max_allowed
+        ));
+    }
+    Ok(())
+}
+
+impl MessageContext {
+    /// Tries to register a custom id.
+    ///
+    /// # Watch out!
+    ///
+    /// Use `register_button` and `register_select_menu` for Buttons and Select Menus respectively!
+    ///
+    /// # Arguments
+    ///
+    /// * `id`: the custom id to be registered
+    ///
+    ///
+    /// # Return value
+    /// Error variant contains an error message
+    fn register_custom_id(&mut self, id: &str) -> Result<(), String> {
+        interval_check(
+            &Message::custom_id_len_interval(),
+            &id.len(),
+            "Custom ID length",
+        )?;
+
+        if !self.custom_ids.insert(id.to_string()) {
+            return Err(format!("Attempt to use the same custom ID ({}) twice!", id));
+        }
+        Ok(())
+    }
+
+    pub fn new() -> MessageContext {
+        MessageContext {
+            custom_ids: HashSet::new(),
+            button_count_in_action_row: 0,
+            select_menu_count_in_action_row: 0,
+        }
+    }
+
+    /// Tries to register a button using the button's custom id.
+    ///
+    /// # Return value
+    /// Error variant contains an error message
+    ///
+    /// # Note
+    /// Subsequent calls register other components semantically in the same action row.
+    /// To register components in a new action row, use the `register_action_row` function before
+    /// calling this function
+    pub fn register_button(&mut self, id: &str) -> Result<(), String> {
+        self.register_custom_id(id)?;
+        self.button_count_in_action_row += 1;
+
+        interval_check(
+            &ActionRow::button_count_interval(),
+            &self.button_count_in_action_row,
+            "Button count",
+        )?;
+
+        if self.select_menu_count_in_action_row > 0 {
+            return Err(
+                "An Action Row containing buttons cannot also contain a select menu".to_string(),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Tries to register a select menu using the button's custom id
+    ///
+    /// # Return value
+    /// Error variant contains an error message
+    ///
+    /// # Note
+    /// Subsequent calls register other components semantically in the same action row.
+    /// To register components in a new action row, use the `register_action_row` function before
+    /// calling this function
+    pub fn register_select_menu(&mut self, id: &str) -> Result<(), String> {
+        self.register_custom_id(id)?;
+        self.select_menu_count_in_action_row += 1;
+
+        interval_check(
+            &ActionRow::select_menu_count_interval(),
+            &self.select_menu_count_in_action_row,
+            "Select menu count",
+        )?;
+
+        if self.button_count_in_action_row > 0 {
+            return Err(
+                "An Action Row containing a select menu cannot also contain buttons".to_string(),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Switches the context to register components logically in a "new" action row.
+    ///
+    /// # Watch out!
+    /// This function shall be called only once per one action row. (due to the lack of action row
+    /// identification)
+    pub fn register_action_row(&mut self) {
+        self.button_count_in_action_row = 0;
+        self.button_count_in_action_row = 0;
     }
 }
 
@@ -892,21 +948,10 @@ impl DiscordApiCompatible for NonCompositeComponent {
     }
 }
 
-fn bool_to_result<E>(b: bool, err: E) -> Result<(), E> {
-    if b {
-        Ok(())
-    } else {
-        Err(err)
-    }
-}
-
 impl DiscordApiCompatible for Button {
     fn check_compatibility(&self, context: &mut MessageContext) -> Result<(), String> {
-        if self.label.is_some() && self.label.as_ref().unwrap().len() > Message::label_max_len() {
-            return Err(format!(
-                "Label length exceeds {} characters",
-                Message::label_max_len()
-            ));
+        if let Some(label) = &self.label {
+            interval_check(&Message::label_len_interval(), &label.len(), "Label length")?;
         }
 
         return match self.style {
@@ -924,14 +969,7 @@ impl DiscordApiCompatible for Button {
             | Some(ButtonStyles::Success)
             | Some(ButtonStyles::Secondary) => {
                 return if let Some(id) = self.custom_id.as_ref() {
-                    bool_to_result(
-                        id.len() <= Message::custom_id_max_len(),
-                        format!(
-                            "Custom ID length exceeds {} characters",
-                            Message::custom_id_max_len()
-                        ),
-                    )
-                    .and(context.register_button(id))
+                    context.register_button(id)
                 } else {
                     Err("Custom ID of a NonLink button must be set!".to_string())
                 };
@@ -943,6 +981,10 @@ impl DiscordApiCompatible for Button {
 impl DiscordApiCompatible for ActionRow {
     fn check_compatibility(&self, context: &mut MessageContext) -> Result<(), String> {
         context.register_action_row();
+        if self.components.is_empty() {
+            return Err("Empty action row detected!".to_string());
+        }
+
         self.components.iter().fold(Ok(()), |acc, component| {
             acc.and(component.check_compatibility(context))
         })
@@ -951,12 +993,11 @@ impl DiscordApiCompatible for ActionRow {
 
 impl DiscordApiCompatible for Message {
     fn check_compatibility(&self, context: &mut MessageContext) -> Result<(), String> {
-        if self.action_rows.len() > Self::max_action_row_count() {
-            return Err(format!(
-                "Action row count exceeded {} (maximum)",
-                Message::max_action_row_count()
-            ));
-        }
+        interval_check(
+            &Message::action_row_count_interval(),
+            &self.action_rows.len(),
+            "Action row count",
+        )?;
 
         self.action_rows
             .iter()
@@ -964,45 +1005,36 @@ impl DiscordApiCompatible for Message {
     }
 }
 
-fn prepare_length_check<'b>(
-    specs: Vec<(&Option<String>, usize, &'b str)>,
-) -> Vec<(String, usize, &'b str)> {
-    let mut result = vec![];
-    for (opt, size, err_name) in specs {
-        if let Some(val) = opt {
-            result.push((val.clone(), size, err_name));
-        }
-    }
-    result
-}
-
-fn limit_max_length(specs: Vec<(&Option<String>, usize, &str)>) -> Result<(), String> {
-    let length_check_specification = prepare_length_check(specs);
-    for (value, max_len, err_name) in length_check_specification {
-        if value.len() > max_len {
-            return Err(format!("{} exceeded maximum length {}", err_name, max_len));
-        }
-    }
-    Ok(())
-}
-
 impl DiscordApiCompatible for SelectOption {
     fn check_compatibility(&self, _context: &mut MessageContext) -> Result<(), String> {
-        if self.label.is_none() {
+        if let Some(label) = &self.label {
+            interval_check(
+                &SelectOption::label_len_interval(),
+                &label.len(),
+                "Label length",
+            )?;
+        } else {
             return Err("Label of a menu option must be set!".to_string());
-        } else if self.value.is_none() {
+        }
+
+        if let Some(value) = &self.value {
+            interval_check(
+                &SelectOption::value_len_interval(),
+                &value.len(),
+                "Value length",
+            )?;
+        } else {
             return Err("Value of a menu option must be set!".to_string());
         }
 
-        limit_max_length(vec![
-            (&self.label, SelectOption::label_max_len(), "Label"),
-            (&self.label, SelectOption::value_max_len(), "Value"),
-            (
-                &self.description,
-                SelectOption::description_max_len(),
-                "Description",
-            ),
-        ])
+        if let Some(desc) = &self.description {
+            interval_check(
+                &SelectOption::description_len_interval(),
+                &desc.len(),
+                "Description length",
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -1014,41 +1046,36 @@ impl DiscordApiCompatible for SelectMenu {
             return Err("Custom ID of a Select menu must be set!".to_string());
         }
 
-        if self.options.len() > SelectMenu::max_option_count() {
-            return Err(format!(
-                "Option count exceeded maximum {}",
-                SelectMenu::max_option_count()
-            ));
-        } else if self.min_values.map_or(false, |val| {
-            val > SelectMenu::maximum_of_min_values() || val < SelectMenu::minimum_of_min_values()
-        }) {
-            return Err(format!(
-                "Min values does not fall into the [{}, {}] interval",
-                SelectMenu::minimum_of_min_values(),
-                SelectMenu::maximum_of_min_values()
-            ));
-        } else if self
-            .max_values
-            .map_or(false, |val| val > SelectMenu::maximum_of_max_values())
-        {
-            return Err(format!(
-                "Max values exceeded maximum {}",
-                SelectMenu::maximum_of_max_values()
-            ));
+        interval_check(
+            &SelectMenu::option_count_interval(),
+            &self.options.len(),
+            "Option count",
+        )?;
+
+        if let Some(min_values) = self.min_values {
+            interval_check(
+                &SelectMenu::min_values_interval(),
+                &min_values,
+                "Min values",
+            )?;
+        }
+        if let Some(max_values) = self.max_values {
+            interval_check(
+                &SelectMenu::max_values_interval(),
+                &max_values,
+                "Max values",
+            )?;
+        }
+        if let Some(placeholder) = &self.placeholder {
+            interval_check(
+                &SelectMenu::placeholder_len_interval(),
+                &placeholder.len(),
+                "Placeholder length",
+            )?;
         }
 
-        limit_max_length(vec![
-            (&self.custom_id, Message::custom_id_max_len(), "Custom ID"),
-            (
-                &self.placeholder,
-                SelectMenu::placeholder_max_len(),
-                "Placeholder",
-            ),
-        ])
-        .and(
-            self.options
-                .iter()
-                .fold(Ok(()), |acc, val| acc.and(val.check_compatibility(context))),
-        )
+        self.options
+            .iter()
+            .fold(Ok(()), |acc, val| acc.and(val.check_compatibility(context)))
     }
 }

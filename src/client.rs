@@ -95,7 +95,8 @@ impl WebhookClient {
 mod tests {
     use crate::client::WebhookClient;
     use crate::models::{
-        ActionRow, DiscordApiCompatible, Message, MessageContext, NonLinkButtonStyle,
+        ActionRow, DiscordApiCompatible, Message, MessageContext, NonLinkButtonStyle, SelectMenu,
+        SelectOption,
     };
 
     async fn assert_client_error<BuildFunc, MessagePred>(
@@ -120,6 +121,16 @@ mod tests {
         };
     }
 
+    fn contains_all_predicate(needles: Vec<&str>) -> Box<dyn Fn(&str) -> bool> {
+        let owned_needles: Vec<String> = needles.iter().map(|n| n.to_string()).collect();
+        Box::new(move |haystack| {
+            let lower_haystack = haystack.to_lowercase();
+            owned_needles
+                .iter()
+                .all(|needle| lower_haystack.contains(needle))
+        })
+    }
+
     fn assert_valid_message<BuildFunc>(func: BuildFunc)
     where
         BuildFunc: Fn(&mut Message) -> &mut Message,
@@ -129,6 +140,15 @@ mod tests {
         if let Err(unexpected) = message.check_compatibility(&mut MessageContext::new()) {
             assert!(false, "Unexpected validation error {}", unexpected);
         }
+    }
+
+    #[tokio::test]
+    async fn empty_action_row_prohibited() {
+        assert_client_error(
+            |message| message.action_row(|row| row),
+            contains_all_predicate(vec!["action row", "empty"]),
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -144,7 +164,7 @@ mod tests {
                     })
                 })
             },
-            |err_msg| err_msg.to_lowercase().contains("twice"),
+            contains_all_predicate(vec!["twice"]),
         )
         .await;
     }
@@ -165,7 +185,7 @@ mod tests {
                         })
                     })
             },
-            |err_msg| err_msg.to_lowercase().contains("twice"),
+            contains_all_predicate(vec!["twice"]),
         )
         .await;
     }
@@ -174,7 +194,7 @@ mod tests {
     async fn send_message_button_style_required() {
         assert_client_error(
             |message| message.action_row(|row| row.regular_button(|button| button.custom_id("0"))),
-            |err_msg| err_msg.to_lowercase().contains("style"),
+            contains_all_predicate(vec!["style"]),
         )
         .await;
     }
@@ -183,7 +203,7 @@ mod tests {
     async fn send_message_url_required() {
         assert_client_error(
             |message| message.action_row(|row| row.link_button(|button| button.label("test"))),
-            |err_msg| err_msg.to_lowercase().contains("url"),
+            contains_all_predicate(vec!["url"]),
         )
         .await;
     }
@@ -192,14 +212,12 @@ mod tests {
     async fn send_message_max_action_rows_enforced() {
         assert_client_error(
             |message| {
-                for _ in 0..(Message::max_action_row_count() + 1) {
+                for _ in 0..(Message::action_row_count_interval().max_allowed + 1) {
                     message.action_row(|row| row);
                 }
                 message
             },
-            |err_msg| {
-                err_msg.to_lowercase().contains("exceed") && err_msg.to_lowercase().contains("row")
-            },
+            contains_all_predicate(vec!["interval", "row"]),
         )
         .await;
     }
@@ -212,14 +230,11 @@ mod tests {
                     row.regular_button(|btn| {
                         btn.style(NonLinkButtonStyle::Primary)
                             .custom_id("a")
-                            .label(&"l".repeat(Message::label_max_len() + 1))
+                            .label(&"l".repeat(Message::label_len_interval().max_allowed + 1))
                     })
                 })
             },
-            |err_msg| {
-                err_msg.to_lowercase().contains("exceed")
-                    && err_msg.to_lowercase().contains("label")
-            },
+            contains_all_predicate(vec!["interval", "label"]),
         )
         .await;
     }
@@ -232,7 +247,7 @@ mod tests {
                     row.regular_button(|btn| btn.style(NonLinkButtonStyle::Primary))
                 })
             },
-            |err_msg| err_msg.to_lowercase().contains("custom id"),
+            contains_all_predicate(vec!["custom id"]),
         )
         .await;
     }
@@ -243,15 +258,13 @@ mod tests {
             |message| {
                 message.action_row(|row| {
                     row.regular_button(|btn| {
-                        btn.style(NonLinkButtonStyle::Primary)
-                            .custom_id(&"a".repeat(Message::custom_id_max_len() + 1))
+                        btn.style(NonLinkButtonStyle::Primary).custom_id(
+                            &"a".repeat(Message::custom_id_len_interval().max_allowed + 1),
+                        )
                     })
                 })
             },
-            |err_msg| {
-                err_msg.to_lowercase().contains("exceed")
-                    && err_msg.to_lowercase().contains("custom id")
-            },
+            contains_all_predicate(vec!["interval", "custom id"]),
         )
         .await;
     }
@@ -261,7 +274,7 @@ mod tests {
         assert_client_error(
             |message| {
                 message.action_row(|row| {
-                    for i in 0..(ActionRow::max_button_count() + 1) {
+                    for i in 0..(ActionRow::button_count_interval().max_allowed + 1) {
                         row.regular_button(|btn| {
                             btn.style(NonLinkButtonStyle::Primary)
                                 .custom_id(&(i.to_string()))
@@ -270,10 +283,7 @@ mod tests {
                     row
                 })
             },
-            |err_msg| {
-                err_msg.to_lowercase().contains("exceed")
-                    && err_msg.to_lowercase().contains("button")
-            },
+            contains_all_predicate(vec!["interval", "button"]),
         )
         .await;
     }
@@ -281,9 +291,9 @@ mod tests {
     #[test]
     fn max_button_count_enforced_only_per_action_row() {
         assert_valid_message(|message| {
-            for i in 0..Message::max_action_row_count() {
+            for i in 0..Message::action_row_count_interval().max_allowed {
                 message.action_row(|row| {
-                    for j in 0..(ActionRow::max_button_count()) {
+                    for j in 0..(ActionRow::button_count_interval().max_allowed) {
                         row.regular_button(|btn| {
                             btn.style(NonLinkButtonStyle::Primary)
                                 .custom_id(&(i.to_string() + &j.to_string()))
@@ -294,6 +304,197 @@ mod tests {
             }
             message
         });
+    }
+
+    #[tokio::test]
+    async fn option_maximum_count_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    row.select_menu(|menu| {
+                        for i in 0..SelectMenu::option_count_interval().max_allowed + 1 {
+                            menu.option(|opt| opt.label(&i.to_string()).value(&i.to_string()));
+                        }
+                        menu.custom_id("test")
+                    });
+                    row
+                })
+            },
+            contains_all_predicate(vec!["interval", "option", "count"]),
+        )
+        .await;
+    }
+
+    fn init_menu_options_and_skip_n(menu: &mut SelectMenu, skip_count: usize) -> &mut SelectMenu {
+        for i in 0..(SelectMenu::option_count_interval().min_allowed - skip_count) {
+            menu.option(|opt| opt.label(&i.to_string()).value(&i.to_string()));
+        }
+        menu
+    }
+
+    fn init_menu_options(menu: &mut SelectMenu) -> &mut SelectMenu {
+        init_menu_options_and_skip_n(menu, 0)
+    }
+
+    #[tokio::test]
+    async fn select_menu_custom_id_len_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    row.select_menu(|menu| {
+                        init_menu_options(menu).custom_id(
+                            &"t".repeat(Message::custom_id_len_interval().max_allowed + 1),
+                        )
+                    });
+                    row
+                })
+            },
+            contains_all_predicate(vec!["custom id", "interval"]),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn select_menu_placeholder_len_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    row.select_menu(|menu| {
+                        init_menu_options(menu).custom_id("test").placeholder(
+                            &"t".repeat(SelectMenu::placeholder_len_interval().max_allowed + 1),
+                        )
+                    });
+                    row
+                })
+            },
+            contains_all_predicate(vec!["placeholder", "interval"]),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn select_menu_min_values_maximum_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    row.select_menu(|menu| {
+                        init_menu_options(menu)
+                            .custom_id("test")
+                            .min_values(SelectMenu::min_values_interval().max_allowed + 1)
+                    });
+                    row
+                })
+            },
+            contains_all_predicate(vec!["min values", "interval"]),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn select_menu_max_values_maximum_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    row.select_menu(|menu| {
+                        init_menu_options(menu)
+                            .custom_id("test")
+                            .max_values(SelectMenu::max_values_interval().max_allowed + 1)
+                    });
+                    row
+                })
+            },
+            contains_all_predicate(vec!["max values", "interval"]),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn max_select_menu_count_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    for i in 0..(ActionRow::select_menu_count_interval().max_allowed + 1) {
+                        row.select_menu(|menu| {
+                            menu.custom_id(&i.to_string())
+                                .option(|opt| opt.label("test").value("test"))
+                        });
+                    }
+                    row
+                })
+            },
+            contains_all_predicate(vec!["interval", "select menu"]),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn select_option_label_len_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    row.select_menu(|menu| {
+                        init_menu_options_and_skip_n(menu, 1)
+                            .custom_id("test")
+                            .option(|opt| {
+                                opt.label(
+                                    &"l".repeat(SelectOption::label_len_interval().max_allowed + 1),
+                                )
+                                .value("test")
+                            })
+                    });
+                    row
+                })
+            },
+            contains_all_predicate(vec!["label", "interval"]),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn select_option_value_len_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    row.select_menu(|menu| {
+                        init_menu_options_and_skip_n(menu, 1)
+                            .custom_id("test")
+                            .option(|opt| {
+                                opt.value(
+                                    &"v".repeat(SelectOption::value_len_interval().max_allowed + 1),
+                                )
+                                .label("test")
+                            })
+                    });
+                    row
+                })
+            },
+            contains_all_predicate(vec!["value", "interval"]),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn select_option_description_len_enforced() {
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    row.select_menu(|menu| {
+                        init_menu_options_and_skip_n(menu, 1)
+                            .custom_id("test")
+                            .option(|opt| {
+                                opt.description(&"d".repeat(
+                                    SelectOption::description_len_interval().max_allowed + 1,
+                                ))
+                                .value("test")
+                                .label("test")
+                            })
+                    });
+                    row
+                })
+            },
+            contains_all_predicate(vec!["description", "interval"]),
+        )
+        .await;
     }
 
     #[test]
@@ -318,5 +519,19 @@ mod tests {
                         .field("test", "test", false)
                 })
         });
+    }
+
+    fn test_is_send<T>(t: T)
+    where
+        T: Send,
+    {
+        drop(t);
+    }
+
+    #[test]
+    fn message_is_send() {
+        let message = Message::new();
+        // this should not compile if Message is not Send
+        test_is_send(message);
     }
 }
