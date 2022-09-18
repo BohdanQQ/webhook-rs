@@ -1,8 +1,33 @@
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashSet;
 use std::fmt::Display;
-
 type Snowflake = String;
+
+macro_rules! string_option_setter {
+    ($base:ident) => {
+        pub fn $base(&mut self, $base: &str) -> &mut Self {
+            self.$base = Some($base.to_string());
+            self
+        }
+    };
+}
+
+macro_rules! simple_option_setter {
+    ($base:ident, $option_inner_t:ty) => {
+        pub fn $base(&mut self, $base: $option_inner_t) -> &mut Self {
+            self.$base = Some($base);
+            self
+        }
+    };
+}
+
+macro_rules! interval_getter {
+    ($name:ident, $option_inner_t:ty, $lower_bound:expr, $upper_bound:expr) => {
+        pub const fn $name() -> Interval<$option_inner_t> {
+            Interval::from_min_max($lower_bound, $upper_bound)
+        }
+    };
+}
 
 #[derive(Deserialize, Debug)]
 pub struct Webhook {
@@ -84,17 +109,9 @@ impl Message {
         self
     }
 
-    pub const fn action_row_count_interval() -> Interval<usize> {
-        Interval::new(0, 5)
-    }
-
-    pub const fn label_len_interval() -> Interval<usize> {
-        Interval::new(0, 80)
-    }
-
-    pub const fn custom_id_len_interval() -> Interval<usize> {
-        Interval::new(1, 100)
-    }
+    interval_getter!(action_row_count_interval, usize, 0, 5);
+    interval_getter!(label_len_interval, usize, 0, 80);
+    interval_getter!(custom_id_len_interval, usize, 1, 100);
 
     pub fn allow_mentions(
         &mut self,
@@ -114,7 +131,7 @@ pub struct Interval<T> {
 }
 
 impl<T: Ord> Interval<T> {
-    pub const fn new(min_allowed: T, max_allowed: T) -> Self {
+    pub const fn from_min_max(min_allowed: T, max_allowed: T) -> Self {
         Interval {
             min_allowed,
             max_allowed,
@@ -395,7 +412,7 @@ impl ActionRow {
             components: vec![],
         }
     }
-    //TODO: (consider) change return type (limit the interface) once Button or SelectMenu is added? (limited to only one of those)
+
     pub fn link_button<Func>(&mut self, button_mutator: Func) -> &mut Self
     where
         Func: Fn(&mut LinkButton) -> &mut LinkButton,
@@ -431,13 +448,8 @@ impl ActionRow {
         self
     }
 
-    pub const fn button_count_interval() -> Interval<usize> {
-        Interval::new(0, 5)
-    }
-
-    pub const fn select_menu_count_interval() -> Interval<usize> {
-        Interval::new(0, 1)
-    }
+    interval_getter!(button_count_interval, usize, 0, 5);
+    interval_getter!(select_menu_count_interval, usize, 0, 1);
 }
 
 #[derive(Debug, Clone)]
@@ -471,25 +483,19 @@ enum ButtonStyles {
     Link,
 }
 
-impl ButtonStyles {
-    /// value for serialization purposes
-    fn value(&self) -> i32 {
-        match *self {
-            ButtonStyles::Primary => 1,
-            ButtonStyles::Secondary => 2,
-            ButtonStyles::Success => 3,
-            ButtonStyles::Danger => 4,
-            ButtonStyles::Link => 5,
-        }
-    }
-}
-
 impl Serialize for ButtonStyles {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_i32(self.value())
+        let to_serialize = match *self {
+            ButtonStyles::Primary => 1,
+            ButtonStyles::Secondary => 2,
+            ButtonStyles::Success => 3,
+            ButtonStyles::Danger => 4,
+            ButtonStyles::Link => 5,
+        };
+        serializer.serialize_i32(to_serialize)
     }
 }
 
@@ -550,10 +556,8 @@ impl ButtonCommonBase {
             disabled,
         }
     }
-    fn label(&mut self, label: &str) -> &mut Self {
-        self.label = Some(label.to_string());
-        self
-    }
+
+    string_option_setter!(label);
 
     fn emoji(&mut self, emoji_id: Snowflake, name: &str, animated: bool) -> &mut Self {
         self.emoji = Some(PartialEmoji {
@@ -563,11 +567,7 @@ impl ButtonCommonBase {
         });
         self
     }
-
-    fn disabled(&mut self, disabled: bool) -> &mut Self {
-        self.disabled = Some(disabled);
-        self
-    }
+    simple_option_setter!(disabled, bool);
 }
 
 /// a macro which takes an identifier (`base`) of the ButtonCommonBase (relative to `self`)
@@ -605,10 +605,7 @@ impl LinkButton {
         }
     }
 
-    pub fn url(&mut self, url: &str) -> &mut Self {
-        self.url = Some(url.to_string());
-        self
-    }
+    string_option_setter!(url);
 
     button_base_delegation!(button_base);
 }
@@ -628,15 +625,8 @@ impl RegularButton {
         }
     }
 
-    pub fn custom_id(&mut self, custom_id: &str) -> &mut Self {
-        self.custom_id = Some(custom_id.to_string());
-        self
-    }
-
-    pub fn style(&mut self, style: NonLinkButtonStyle) -> &mut Self {
-        self.style = Some(style);
-        self
-    }
+    string_option_setter!(custom_id);
+    simple_option_setter!(style, NonLinkButtonStyle);
 
     button_base_delegation!(button_base);
 }
@@ -669,24 +659,6 @@ impl ToSerializableButton for RegularButton {
             self.button_base.disabled,
         )
     }
-}
-
-macro_rules! string_option_setter {
-    ($base:ident) => {
-        pub fn $base(&mut self, $base: &str) -> &mut Self {
-            self.$base = Some($base.to_string());
-            self
-        }
-    };
-}
-
-macro_rules! simple_option_setter {
-    ($base:ident, $option_inner_t:ty) => {
-        pub fn $base(&mut self, $base: $option_inner_t) -> &mut Self {
-            self.$base = Some($base);
-            self
-        }
-    };
 }
 
 #[derive(Serialize, Debug)]
@@ -736,23 +708,13 @@ impl SelectMenu {
     simple_option_setter!(max_values, u8);
     simple_option_setter!(disabled, bool);
 
-    pub const fn option_count_interval() -> Interval<usize> {
-        Interval::new(1, 25)
-    }
-
-    pub const fn placeholder_len_interval() -> Interval<usize> {
-        Interval::new(0, 150)
-    }
-
-    pub const fn min_values_interval() -> Interval<u8> {
-        Interval::new(0, 25)
-    }
+    interval_getter!(option_count_interval, usize, 1, 25);
+    interval_getter!(placeholder_len_interval, usize, 0, 150);
+    interval_getter!(min_values_interval, u8, 0, 25);
 
     // the minimum is not actually stated, but at the time of implementing the API returns an error response when max_values == 0
     // additionally, max_values == 0 doesn't really make sense
-    pub const fn max_values_interval() -> Interval<u8> {
-        Interval::new(1, 25)
-    }
+    interval_getter!(max_values_interval, u8, 1, 25);
 }
 
 #[derive(Serialize, Debug)]
@@ -795,16 +757,9 @@ impl SelectOption {
     }
 
     simple_option_setter!(default, bool);
-
-    pub const fn label_len_interval() -> Interval<usize> {
-        Interval::new(1, 100)
-    }
-    pub const fn value_len_interval() -> Interval<usize> {
-        Interval::new(1, 100)
-    }
-    pub const fn description_len_interval() -> Interval<usize> {
-        Interval::new(0, 100)
-    }
+    interval_getter!(label_len_interval, usize, 1, 100);
+    interval_getter!(value_len_interval, usize, 1, 100);
+    interval_getter!(description_len_interval, usize, 0, 100);
 }
 
 #[derive(Debug)]
@@ -855,7 +810,7 @@ impl MessageContext {
         Ok(())
     }
 
-    pub fn new() -> MessageContext {
+    pub(crate) fn new() -> MessageContext {
         MessageContext {
             custom_ids: HashSet::new(),
             button_count_in_action_row: 0,
@@ -872,7 +827,7 @@ impl MessageContext {
     /// Subsequent calls register other components semantically in the same action row.
     /// To register components in a new action row, use the `register_action_row` function before
     /// calling this function
-    pub fn register_button(&mut self, id: &str) -> Result<(), String> {
+    fn register_button(&mut self, id: &str) -> Result<(), String> {
         self.register_custom_id(id)?;
         self.button_count_in_action_row += 1;
 
@@ -900,7 +855,7 @@ impl MessageContext {
     /// Subsequent calls register other components semantically in the same action row.
     /// To register components in a new action row, use the `register_action_row` function before
     /// calling this function
-    pub fn register_select_menu(&mut self, id: &str) -> Result<(), String> {
+    fn register_select_menu(&mut self, id: &str) -> Result<(), String> {
         self.register_custom_id(id)?;
         self.select_menu_count_in_action_row += 1;
 
@@ -924,7 +879,7 @@ impl MessageContext {
     /// # Watch out!
     /// This function shall be called only once per one action row. (due to the lack of action row
     /// identification)
-    pub fn register_action_row(&mut self) {
+    fn register_action_row(&mut self) {
         self.button_count_in_action_row = 0;
         self.button_count_in_action_row = 0;
     }
@@ -1052,12 +1007,15 @@ impl DiscordApiCompatible for SelectMenu {
             "Option count",
         )?;
 
+        let mut min = 0;
+        let mut max = 0;
         if let Some(min_values) = self.min_values {
             interval_check(
                 &SelectMenu::min_values_interval(),
                 &min_values,
                 "Min values",
             )?;
+            min = min_values;
         }
         if let Some(max_values) = self.max_values {
             interval_check(
@@ -1065,7 +1023,15 @@ impl DiscordApiCompatible for SelectMenu {
                 &max_values,
                 "Max values",
             )?;
+            max = max_values;
         }
+        if self.min_values.is_some() && self.max_values.is_some() && min > max {
+            return Err(format!(
+                "Min values ({}) more than max values ({})",
+                min, max
+            ));
+        }
+
         if let Some(placeholder) = &self.placeholder {
             interval_check(
                 &SelectMenu::placeholder_len_interval(),

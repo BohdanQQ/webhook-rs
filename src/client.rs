@@ -497,6 +497,31 @@ mod tests {
         .await;
     }
 
+    #[tokio::test]
+    async fn select_menu_min_values_less_or_eq_max_values_enforced() {
+        if SelectMenu::min_values_interval().max_allowed
+            <= SelectMenu::max_values_interval().min_allowed
+        {
+            return; // the test does not make sense, min and max values are always consistent
+        }
+
+        assert_client_error(
+            |message| {
+                message.action_row(|row| {
+                    row.select_menu(|menu| {
+                        init_menu_options(menu)
+                            .custom_id("test")
+                            .min_values(SelectMenu::min_values_interval().max_allowed)
+                            .max_values(SelectMenu::max_values_interval().min_allowed)
+                    });
+                    row
+                })
+            },
+            contains_all_predicate(vec!["min", "max"]),
+        )
+        .await;
+    }
+
     #[test]
     fn message_valid_basic() {
         assert_valid_message(|message| {
