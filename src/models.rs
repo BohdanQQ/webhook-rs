@@ -67,20 +67,9 @@ impl Message {
         }
     }
 
-    pub fn content(&mut self, content: &str) -> &mut Self {
-        self.content = Some(content.to_owned());
-        self
-    }
-
-    pub fn username(&mut self, username: &str) -> &mut Self {
-        self.username = Some(username.to_owned());
-        self
-    }
-
-    pub fn avatar_url(&mut self, avatar_url: &str) -> &mut Self {
-        self.avatar_url = Some(avatar_url.to_owned());
-        self
-    }
+    string_option_setter!(content);
+    string_option_setter!(username);
+    string_option_setter!(avatar_url);
 
     pub fn tts(&mut self, tts: bool) -> &mut Self {
         self.tts = tts;
@@ -181,30 +170,11 @@ impl Embed {
         }
     }
 
-    pub fn title(&mut self, title: &str) -> &mut Self {
-        self.title = Some(title.to_owned());
-        self
-    }
-
-    pub fn description(&mut self, description: &str) -> &mut Self {
-        self.description = Some(description.to_owned());
-        self
-    }
-
-    pub fn url(&mut self, url: &str) -> &mut Self {
-        self.url = Some(url.to_owned());
-        self
-    }
-
-    pub fn timestamp(&mut self, timestamp: &str) -> &mut Self {
-        self.timestamp = Some(timestamp.to_owned());
-        self
-    }
-
-    pub fn color(&mut self, color: &str) -> &mut Self {
-        self.color = Some(color.to_owned());
-        self
-    }
+    string_option_setter!(title);
+    string_option_setter!(description);
+    string_option_setter!(url);
+    string_option_setter!(timestamp);
+    string_option_setter!(color);
 
     pub fn footer(&mut self, text: &str, icon_url: Option<String>) -> &mut Self {
         self.footer = Some(EmbedFooter::new(text, icon_url));
