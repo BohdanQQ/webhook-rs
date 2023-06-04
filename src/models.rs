@@ -916,6 +916,12 @@ impl DiscordApiCompatible for ActionRow {
     }
 }
 
+impl DiscordApiCompatible for Embed {
+    fn check_compatibility(&self, context: &mut MessageContext) -> Result<(), String> {
+        todo!()
+    }
+}
+
 impl DiscordApiCompatible for Message {
     fn check_compatibility(&self, context: &mut MessageContext) -> Result<(), String> {
         interval_check(
@@ -926,7 +932,8 @@ impl DiscordApiCompatible for Message {
 
         self.action_rows
             .iter()
-            .fold(Ok(()), |acc, row| acc.and(row.check_compatibility(context)))
+            .fold(Ok(()), |acc, row| acc.and(row.check_compatibility(context))).and(self.embeds.iter()
+            .fold(Ok(()), |acc, embed| acc.and(embed.check_compatibility(context))))
     }
 }
 
